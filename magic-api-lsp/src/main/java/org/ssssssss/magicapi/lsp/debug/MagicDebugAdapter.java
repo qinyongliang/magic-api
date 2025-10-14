@@ -113,8 +113,8 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
             scriptEngine = new MagicScriptEngine(new MagicScriptEngineFactory());
             currentSourcePath = program;
             
-            // Read script content
-            String scriptContent = Files.readString(Paths.get(program));
+            // Read script content (Java 8 compatible)
+            String scriptContent = new String(Files.readAllBytes(Paths.get(program)), java.nio.charset.StandardCharsets.UTF_8);
             
             // Create debug context with current breakpoints
             List<Integer> breakpointLines = new ArrayList<>(lineBreakpoints.values());

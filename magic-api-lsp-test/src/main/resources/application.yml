@@ -1,0 +1,46 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    driverClassName: org.postgresql.Driver
+    url: jdbc:postgresql://test.jmny.top:5432/dayi-standard-data-center-private?characterEncoding=utf-8&useSSL=true&autoReconnect=true&reWriteBatchedInserts=true
+    username: postgres
+    password: rdhy@9999
+
+# Magic API 配置
+magic-api:
+  auto-import-module: db,magic,http,log,request,response
+  banner: true #是否显示banner
+  resource:
+    type: database # 配置存储在数据库中
+    tableName: magic_api_file_v2_test # 数据库中的表名
+    #    datasource: magic_config #指定数据源（单数据源时无需配置，多数据源时默认使用主数据源，如果存在其他数据源中需要指定。）
+    prefix: /magic-api # key前缀
+    readonly: false # 是否是只读模式
+  sql-column-case: camel #启用驼峰命名转换
+  show-sql: true #配置打印SQL
+  page:
+    size: pageSize # 页大小的参数名称
+    page: page # 页码的参数名称
+    default-page: 1 # 未传页码时的默认首页
+    default-size: 10 # 未传页大小时的默认页大小
+  # 开启 Web 页面
+  web: /magic/web
+  # 开启 LSP 服务
+  lsp:
+    enabled: true
+    port: 8081
+  # 开启调试
+  debug:
+    enabled: true
+    port: 8082
+  # 安全配置
+  security:
+    username: admin
+    password: admin123
+
+logging:
+  level:
+    org.ssssssss.magicapi: DEBUG
+    org.ssssssss.magicapi.lsp: DEBUG

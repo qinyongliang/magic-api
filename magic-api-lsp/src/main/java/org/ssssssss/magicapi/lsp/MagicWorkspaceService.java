@@ -2,6 +2,9 @@ package org.ssssssss.magicapi.lsp;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.apache.commons.collections.ListUtils;
+import org.apache.commons.compress.utils.Lists;
+import org.apache.commons.lang3.StringUtils;
 import org.eclipse.lsp4j.*;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.services.LanguageClient;
@@ -23,6 +26,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -1033,7 +1039,7 @@ public class MagicWorkspaceService implements WorkspaceService {
      * 获取Magic API内置函数列表
      */
     private List<String> getBuiltinFunctions() {
-        return List.of(
+        return Arrays.asList(
             // 数据库操作
             "db", "select", "selectInt", "selectOne", "selectValue", "insert", "update", "delete",
             // HTTP操作
@@ -1068,7 +1074,7 @@ public class MagicWorkspaceService implements WorkspaceService {
         
         // TODO: Implement find implementation functionality
         
-        return CompletableFuture.completedFuture(List.of());
+        return CompletableFuture.completedFuture(Collections.emptyList());
     }
     
     public CompletableFuture<List<? extends DocumentHighlight>> documentHighlight(DocumentHighlightParams params) {
@@ -1083,13 +1089,13 @@ public class MagicWorkspaceService implements WorkspaceService {
             // 获取文档内容
             String content = getDocumentContent(uri);
             if (content == null) {
-                return CompletableFuture.completedFuture(List.of());
+                return CompletableFuture.completedFuture(Collections.emptyList());
             }
             
             // 获取光标位置的符号
             String symbol = getSymbolAtPosition(content, position);
             if (symbol == null || symbol.trim().isEmpty()) {
-                return CompletableFuture.completedFuture(List.of());
+                return CompletableFuture.completedFuture(Collections.emptyList());
             }
             
             // 查找文档中所有符号出现位置
@@ -1102,7 +1108,7 @@ public class MagicWorkspaceService implements WorkspaceService {
             
         } catch (Exception e) {
             logger.error("Error during document highlight", e);
-            return CompletableFuture.completedFuture(List.of());
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
     }
     
@@ -1211,7 +1217,7 @@ public class MagicWorkspaceService implements WorkspaceService {
             String uri = params.getTextDocument().getUri();
             String content = getDocumentContent(uri);
             if (content == null) {
-                return CompletableFuture.completedFuture(List.of());
+                return CompletableFuture.completedFuture(Collections.emptyList());
             }
             
             List<CodeLens> codeLenses = new ArrayList<>();
@@ -1227,7 +1233,7 @@ public class MagicWorkspaceService implements WorkspaceService {
             
         } catch (Exception e) {
             logger.error("Error during code lens generation", e);
-            return CompletableFuture.completedFuture(List.of());
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
     }
     
@@ -1257,7 +1263,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 Command command = new Command();
                 command.setTitle(String.format("📊 %d references", referenceCount));
                 command.setCommand("magic.showReferences");
-                command.setArguments(List.of(uri, new Position(lineIndex, functionMatcher.start()), functionName));
+                command.setArguments(Arrays.asList(uri, new Position(lineIndex, functionMatcher.start()), functionName));
                 
                 codeLenses.add(new CodeLens(range, command, functionName));
             }
@@ -1274,7 +1280,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                     Command command = new Command();
                     command.setTitle("⚡ Async Function");
                     command.setCommand("magic.showAsyncInfo");
-                    command.setArguments(List.of(uri, asyncMatcher.group(1)));
+                    command.setArguments(Arrays.asList(uri, asyncMatcher.group(1)));
                     
                     codeLenses.add(new CodeLens(range, command, "async"));
                 }
@@ -1309,7 +1315,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                     Command command = new Command();
                     command.setTitle(String.format("🌐 %s Request", method.toUpperCase()));
                     command.setCommand("magic.showHttpInfo");
-                    command.setArguments(List.of(uri, method, lineIndex));
+                    command.setArguments(Arrays.asList(uri, method, lineIndex));
                     
                     codeLenses.add(new CodeLens(range, command, "http"));
                 }
@@ -1334,7 +1340,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                     Command command = new Command();
                     command.setTitle(String.format("🗄️ %s Query", sqlType));
                     command.setCommand("magic.showSqlInfo");
-                    command.setArguments(List.of(uri, sqlType, lineIndex));
+                    command.setArguments(Arrays.asList(uri, sqlType, lineIndex));
                     
                     codeLenses.add(new CodeLens(range, command, "sql"));
                 }
@@ -1370,7 +1376,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                     Command command = new Command();
                     command.setTitle(String.format("🔄 %s", complexity));
                     command.setCommand("magic.showPerformanceInfo");
-                    command.setArguments(List.of(uri, "loop", lineIndex, complexity));
+                    command.setArguments(Arrays.asList(uri, "loop", lineIndex, complexity));
                     
                     codeLenses.add(new CodeLens(range, command, "performance"));
                 }
@@ -1389,7 +1395,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                     Command command = new Command();
                     command.setTitle("⚠️ Blocking Operation");
                     command.setCommand("magic.showPerformanceWarning");
-                    command.setArguments(List.of(uri, "sleep", lineIndex));
+                    command.setArguments(Arrays.asList(uri, "sleep", lineIndex));
                     
                     codeLenses.add(new CodeLens(range, command, "warning"));
                 }
@@ -1532,7 +1538,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 String uri = params.getTextDocument().getUri();
                 String content = getDocumentContent(uri);
                 if (content == null) {
-                    return List.of();
+                    return Collections.emptyList();
                 }
                 
                 FormattingOptions options = params.getOptions();
@@ -1546,13 +1552,13 @@ public class MagicWorkspaceService implements WorkspaceService {
                         new Position(lines.length - 1, lines[lines.length - 1].length())
                     );
                     
-                    return List.of(new TextEdit(range, formattedContent));
+                    return Collections.singletonList(new TextEdit(range, formattedContent));
                 }
                 
-                return List.of();
+                return Collections.emptyList();
             } catch (Exception e) {
                 logger.error("Error during document formatting", e);
-                return List.of();
+                return Collections.emptyList();
             }
         });
     }
@@ -1565,7 +1571,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 String uri = params.getTextDocument().getUri();
                 String content = getDocumentContent(uri);
                 if (content == null) {
-                    return List.of();
+                    return Collections.emptyList();
                 }
                 
                 Range range = params.getRange();
@@ -1613,13 +1619,13 @@ public class MagicWorkspaceService implements WorkspaceService {
                 String formattedRangeContent = formatMagicScript(originalRangeContent, options);
                 
                 if (!originalRangeContent.equals(formattedRangeContent)) {
-                    return List.of(new TextEdit(range, formattedRangeContent));
+                    return Collections.singletonList(new TextEdit(range, formattedRangeContent));
                 }
                 
-                return List.of();
+                return Collections.emptyList();
             } catch (Exception e) {
                 logger.error("Error during range formatting", e);
-                return List.of();
+                return Collections.emptyList();
             }
         });
     }
@@ -1632,7 +1638,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 String uri = params.getTextDocument().getUri();
                 String content = getDocumentContent(uri);
                 if (content == null) {
-                    return List.of();
+                    return Collections.emptyList();
                 }
                 
                 Position position = params.getPosition();
@@ -1664,7 +1670,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 return edits;
             } catch (Exception e) {
                 logger.error("Error during on-type formatting", e);
-                return List.of();
+                return Collections.emptyList();
             }
         });
     }
@@ -1755,13 +1761,13 @@ public class MagicWorkspaceService implements WorkspaceService {
      * 检查是否为保留关键字
      */
     private boolean isReservedKeyword(String name) {
-        Set<String> keywords = Set.of(
+        Set<String> keywords = new HashSet<>(Arrays.asList(
             "var", "let", "const", "function", "return", "if", "else", "for", "while", "do",
             "switch", "case", "default", "break", "continue", "try", "catch", "finally",
             "throw", "new", "this", "super", "class", "extends", "import", "export",
             "true", "false", "null", "undefined", "typeof", "instanceof", "in", "of",
             "async", "await", "yield", "delete", "void", "with", "debugger"
-        );
+        ));
         return keywords.contains(name);
     }
     
@@ -1914,7 +1920,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 String uri = params.getTextDocument().getUri();
                 String content = getDocumentContent(uri);
                 if (content == null) {
-                    return List.of();
+                    return Collections.emptyList();
                 }
                 
                 List<FoldingRange> foldingRanges = new ArrayList<>();
@@ -1941,7 +1947,7 @@ public class MagicWorkspaceService implements WorkspaceService {
                 return foldingRanges;
             } catch (Exception e) {
                 logger.error("Error creating folding ranges", e);
-                return List.of();
+                return Collections.emptyList();
             }
         });
     }
@@ -2387,9 +2393,9 @@ public class MagicWorkspaceService implements WorkspaceService {
         
         if (options.isInsertSpaces()) {
             int tabSize = options.getTabSize();
-            return " ".repeat(level * tabSize);
+            return StringUtils.repeat(" ", level * tabSize);
         } else {
-            return "\t".repeat(level);
+            return StringUtils.repeat("\t", level);
         }
     }
     

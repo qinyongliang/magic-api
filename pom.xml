@@ -51,6 +51,7 @@
         <module>magic-api-plugins</module>
         <module>magic-api-spring-boot-starter</module>
         <module>magic-api-lsp</module>
+        <module>magic-api-lsp-test</module>
     </modules>
     <dependencyManagement>
         <dependencies>
