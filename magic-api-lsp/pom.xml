@@ -58,6 +58,13 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Spring Web (Optional, for REST controllers exposed to VSCode) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
