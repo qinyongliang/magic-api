@@ -51,6 +51,13 @@
             <version>${lsp4j.version}</version>
         </dependency>
 
+        <!-- LSP4J WebSocket Support (javax flavor) -->
+        <dependency>
+            <groupId>org.eclipse.lsp4j</groupId>
+            <artifactId>org.eclipse.lsp4j.websocket</artifactId>
+            <version>${lsp4j.version}</version>
+        </dependency>
+
         <!-- Spring Boot (Optional, for standalone server) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -63,6 +70,21 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- Spring WebSocket (for @ServerEndpoint registration in embedded containers) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- WebSocket API annotations -->
+        <dependency>
+            <groupId>javax.websocket</groupId>
+            <artifactId>javax.websocket-api</artifactId>
+            <version>1.1</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- Logging -->

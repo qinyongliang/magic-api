@@ -27,14 +27,6 @@ magic-api:
     default-size: 10 # 未传页大小时的默认页大小
   # 开启 Web 页面
   web: /magic/web
-  # 开启 LSP 服务
-  lsp:
-    enabled: true
-    port: 8081
-  # 开启调试
-  debug:
-    enabled: true
-    port: 8082
   # 安全配置
   security:
     username: admin

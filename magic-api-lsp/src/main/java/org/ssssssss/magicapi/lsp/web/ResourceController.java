@@ -253,28 +253,6 @@ public class ResourceController {
     }
 
     /**
-     * 去除 /magic-api/ 前缀，返回 VSCode 展示用相对路径。
-     */
-    private String stripMagicApiPrefix(String path) {
-        if (path == null) return null;
-        String normalized = path.replace('\\', '/');
-        String marker = "/magic-api/";
-        int idx = normalized.indexOf(marker);
-        if (idx >= 0) {
-            return normalized.substring(idx + marker.length());
-        }
-        if (normalized.startsWith("magic-api/")) {
-            return normalized.substring("magic-api/".length());
-        }
-        if (normalized.startsWith("/magic-api")) {
-            String rest = normalized.substring("/magic-api".length());
-            if (rest.startsWith("/")) rest = rest.substring(1);
-            return rest;
-        }
-        return normalized;
-    }
-
-    /**
      * 根据类型与分组路径(不含类型段)解析分组ID（形如 type:uuid）。
      */
     private String resolveGroupId(String type, String groupPathSub) {
