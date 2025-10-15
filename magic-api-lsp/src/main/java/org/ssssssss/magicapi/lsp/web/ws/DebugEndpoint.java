@@ -3,8 +3,6 @@ package org.ssssssss.magicapi.lsp.web.ws;
 import org.eclipse.lsp4j.debug.services.IDebugProtocolClient;
 import org.eclipse.lsp4j.jsonrpc.Launcher;
 import org.eclipse.lsp4j.websocket.WebSocketLauncherBuilder;
-import org.eclipse.lsp4j.websocket.WebSocketMessageConsumer;
-import org.eclipse.lsp4j.websocket.WebSocketMessageProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -35,9 +33,7 @@ public class DebugEndpoint {
             MagicDebugAdapter adapter = new MagicDebugAdapter();
             WebSocketLauncherBuilder<IDebugProtocolClient> builder = new WebSocketLauncherBuilder<>();
             builder.setSession(session);
-            // Explicitly set message transport to avoid msgProcessor being null
-            builder.setMessageConsumer(new WebSocketMessageConsumer(session));
-            builder.setMessageProvider(new WebSocketMessageProducer(session));
+            // Use default WebSocket transport provided by the builder for lsp4j 0.21.x
             builder.setLocalService(adapter);
             builder.setRemoteInterface(IDebugProtocolClient.class);
             builder.setExecutorService(Executors.newCachedThreadPool());
