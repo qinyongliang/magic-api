@@ -2,6 +2,10 @@ package org.ssssssss.magicapi.lsp;
 
 import org.eclipse.lsp4j.*;
 import org.eclipse.lsp4j.services.*;
+import org.eclipse.lsp4j.SemanticTokensLegend;
+import org.eclipse.lsp4j.SemanticTokensWithRegistrationOptions;
+import org.eclipse.lsp4j.SemanticTokenTypes;
+import org.eclipse.lsp4j.SemanticTokenModifiers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,6 +63,48 @@ public class MagicLanguageServer implements LanguageServer, LanguageClientAware 
         
         // References support
         capabilities.setReferencesProvider(true);
+
+        // Semantic tokens provider (full & range) with legend aligned to tokenizer
+        SemanticTokensLegend legend = new SemanticTokensLegend(
+                java.util.Arrays.asList(
+                        SemanticTokenTypes.Namespace,
+                        SemanticTokenTypes.Type,
+                        SemanticTokenTypes.Class,
+                        SemanticTokenTypes.Enum,
+                        SemanticTokenTypes.Interface,
+                        SemanticTokenTypes.Struct,
+                        SemanticTokenTypes.TypeParameter,
+                        SemanticTokenTypes.Parameter,
+                        SemanticTokenTypes.Variable,
+                        SemanticTokenTypes.Property,
+                        SemanticTokenTypes.EnumMember,
+                        SemanticTokenTypes.Event,
+                        SemanticTokenTypes.Function,
+                        SemanticTokenTypes.Method,
+                        SemanticTokenTypes.Macro,
+                        SemanticTokenTypes.Keyword,
+                        SemanticTokenTypes.Modifier,
+                        SemanticTokenTypes.Comment,
+                        SemanticTokenTypes.String,
+                        SemanticTokenTypes.Number,
+                        SemanticTokenTypes.Regexp,
+                        SemanticTokenTypes.Operator
+                ),
+                java.util.Arrays.asList(
+                        SemanticTokenModifiers.Declaration,
+                        SemanticTokenModifiers.Definition,
+                        SemanticTokenModifiers.Readonly,
+                        SemanticTokenModifiers.Static,
+                        SemanticTokenModifiers.Deprecated,
+                        SemanticTokenModifiers.Abstract,
+                        SemanticTokenModifiers.Async,
+                        SemanticTokenModifiers.Modification,
+                        SemanticTokenModifiers.Documentation,
+                        SemanticTokenModifiers.DefaultLibrary
+                )
+        );
+        SemanticTokensWithRegistrationOptions semanticTokensOptions = new SemanticTokensWithRegistrationOptions(legend, true, true);
+        capabilities.setSemanticTokensProvider(semanticTokensOptions);
         
         InitializeResult result = new InitializeResult(capabilities);
         

@@ -72,7 +72,7 @@ public class ResourceController {
             String type = parts[0];
             String groupPathSub = parts.length > 1 ? parts[1] : "";
             String groupId = resolveGroupId(type, groupPathSub);
-            if (groupId == null) {
+            if (groupId == null || groupId.equals("0")) {
                 return new JsonBean<>(Collections.emptyList());
             }
             List<MagicFileInfo> result = service.listFiles(groupId).stream()

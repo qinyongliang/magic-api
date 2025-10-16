@@ -12,7 +12,6 @@ import javax.websocket.OnClose;
 import javax.websocket.OnError;
 import javax.websocket.OnOpen;
 import javax.websocket.Session;
-import java.util.concurrent.Future;
 import java.util.concurrent.Executors;
 
 /**
@@ -23,8 +22,6 @@ import java.util.concurrent.Executors;
 public class LspEndpoint {
 
     private static final Logger logger = LoggerFactory.getLogger(LspEndpoint.class);
-
-    private volatile Future<?> listening;
 
     @OnOpen
     public void onOpen(Session session) {
@@ -40,8 +37,8 @@ public class LspEndpoint {
             Launcher<LanguageClient> launcher = builder.create();
             LanguageClient client = launcher.getRemoteProxy();
             server.connect(client);
-            listening = launcher.startListening();
-            logger.info("LSP WebSocket session {} started listening", session.getId());
+            // WebSocketLauncherBuilder 已注册 message handlers，勿调用 startListening()
+            logger.info("LSP WebSocket session {} initialized (handlers attached)", session.getId());
         } catch (Throwable t) {
             logger.error("Failed to start LSP over WebSocket for session {}", session.getId(), t);
             try { session.close(); } catch (Throwable ignored) {}
@@ -56,9 +53,6 @@ public class LspEndpoint {
     @OnClose
     public void onClose(Session session) {
         logger.info("LSP WebSocket connection closed: {}", session.getId());
-        Future<?> f = listening;
-        if (f != null) {
-            try { f.cancel(true); } catch (Throwable ignored) {}
-        }
+        // 会话关闭后，WebSocket 的 message handlers 自动停止，无需取消独立监听
     }
 }

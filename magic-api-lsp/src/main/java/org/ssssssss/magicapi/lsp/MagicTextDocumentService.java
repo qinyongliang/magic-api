@@ -9,6 +9,7 @@ import org.eclipse.lsp4j.SemanticTokens;
 import org.eclipse.lsp4j.SemanticTokensParams;
 import org.eclipse.lsp4j.SemanticTokensRangeParams;
 import org.ssssssss.script.MagicScriptEngine;
+import org.ssssssss.script.MagicResourceLoader;
 import org.ssssssss.script.ScriptClass;
 import org.ssssssss.script.ScriptClass.ScriptMethod;
 import org.ssssssss.script.reflection.JavaReflection;
@@ -41,6 +42,12 @@ public class MagicTextDocumentService implements TextDocumentService {
     // LSP客户端引用
     private LanguageClient client;
 
+    // Magic 引擎数据缓存，降低频繁构建开销
+    private volatile Map<String, ScriptClass> cachedScriptClasses;
+    private volatile Map<String, ScriptClass> cachedExtensionClasses;
+    private volatile List<ScriptMethod> cachedFunctions;
+    private volatile Set<String> cachedModuleNames;
+
     // 解析结果缓存类
     private static class ParseResult {
         private final List<Node> nodes;
@@ -63,6 +70,90 @@ public class MagicTextDocumentService implements TextDocumentService {
 
     public void setClient(LanguageClient client) {
         this.client = client;
+    }
+    
+    private void ensureMagicCaches() {
+        if (cachedScriptClasses == null) {
+            try {
+                cachedScriptClasses = MagicScriptEngine.getScriptClassMap();
+            } catch (Exception e) {
+                cachedScriptClasses = Collections.emptyMap();
+            }
+        }
+        if (cachedExtensionClasses == null) {
+            try {
+                cachedExtensionClasses = MagicScriptEngine.getExtensionScriptClass();
+            } catch (Exception e) {
+                cachedExtensionClasses = Collections.emptyMap();
+            }
+        }
+        if (cachedFunctions == null) {
+            try {
+                cachedFunctions = MagicScriptEngine.getFunctions();
+            } catch (Exception e) {
+                cachedFunctions = Collections.emptyList();
+            }
+        }
+        if (cachedModuleNames == null) {
+            try {
+                cachedModuleNames = MagicResourceLoader.getModuleNames();
+            } catch (Exception e) {
+                cachedModuleNames = Collections.emptySet();
+            }
+        }
+    }
+
+    private Map<String, List<ScriptMethod>> getMagicFunctionDetails() {
+        ensureMagicCaches();
+        Map<String, List<ScriptMethod>> details = new HashMap<>();
+        for (ScriptMethod method : cachedFunctions) {
+            details.computeIfAbsent(method.getName(), k -> new ArrayList<>()).add(method);
+        }
+        return details;
+    }
+
+    private Map<String, List<ScriptMethod>> getMagicClassMethodDetails() {
+        ensureMagicCaches();
+        Map<String, List<ScriptMethod>> result = new HashMap<>();
+        // 基础类方法
+        for (Map.Entry<String, ScriptClass> entry : cachedScriptClasses.entrySet()) {
+            String className = entry.getKey();
+            Set<ScriptMethod> ms = entry.getValue().getMethods();
+            if (ms != null) {
+                result.put(className, new ArrayList<>(ms));
+            }
+        }
+        // 扩展方法合并
+        for (Map.Entry<String, ScriptClass> entry : cachedExtensionClasses.entrySet()) {
+            String className = entry.getKey();
+            Set<ScriptMethod> ms = entry.getValue().getMethods();
+            if (ms != null) {
+                List<ScriptMethod> target = result.computeIfAbsent(className, k -> new ArrayList<>());
+                for (ScriptMethod m : ms) {
+                    if (!target.contains(m)) { // ScriptMethod 已实现 equals，避免重复
+                        target.add(m);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private String formatMethodSignature(ScriptMethod method) {
+        String params = method.getParameters().stream()
+                .map(p -> {
+                    String type = p.getType();
+                    if (p.isVarArgs()) {
+                        type = type + "...";
+                    }
+                    return type + " " + p.getName();
+                })
+                .collect(java.util.stream.Collectors.joining(", "));
+        String sig = method.getName() + "(" + params + "): " + method.getReturnType();
+        if (method.isDeprecated()) {
+            sig += " [deprecated]";
+        }
+        return sig;
     }
     
     // 基础关键字 - 从magic-script Parser.java中获取
@@ -95,7 +186,8 @@ public class MagicTextDocumentService implements TextDocumentService {
     // 动态获取Magic Script函数
     private List<String> getMagicFunctions() {
         try {
-            return MagicScriptEngine.getFunctions().stream()
+            ensureMagicCaches();
+            return cachedFunctions.stream()
                 .map(ScriptMethod::getName)
                 .distinct()
                 .sorted()
@@ -129,42 +221,37 @@ public class MagicTextDocumentService implements TextDocumentService {
     // 动态获取Magic Script类和扩展方法
     private Map<String, List<String>> getMagicClassMethods() {
         try {
+            ensureMagicCaches();
             Map<String, List<String>> classMethods = new HashMap<>();
-            
-            // 获取所有脚本类
-            Map<String, ScriptClass> scriptClasses = MagicScriptEngine.getScriptClassMap();
-            for (Map.Entry<String, ScriptClass> entry : scriptClasses.entrySet()) {
+
+            // 基础类方法
+            for (Map.Entry<String, ScriptClass> entry : cachedScriptClasses.entrySet()) {
                 String className = entry.getKey();
                 ScriptClass scriptClass = entry.getValue();
-                
                 List<String> methods = scriptClass.getMethods().stream()
-                    .map(ScriptMethod::getName)
-                    .distinct()
-                    .sorted()
-                    .collect(Collectors.toList());
-                
+                        .map(ScriptMethod::getName)
+                        .distinct()
+                        .sorted()
+                        .collect(Collectors.toList());
                 classMethods.put(className, methods);
             }
-            
-            // 获取扩展类方法
-            Map<String, ScriptClass> extensionClasses = MagicScriptEngine.getExtensionScriptClass();
-            for (Map.Entry<String, ScriptClass> entry : extensionClasses.entrySet()) {
+
+            // 扩展方法
+            for (Map.Entry<String, ScriptClass> entry : cachedExtensionClasses.entrySet()) {
                 String className = entry.getKey();
                 ScriptClass scriptClass = entry.getValue();
-                
                 List<String> methods = scriptClass.getMethods().stream()
-                    .map(ScriptMethod::getName)
-                    .distinct()
-                    .sorted()
-                    .collect(Collectors.toList());
-                
+                        .map(ScriptMethod::getName)
+                        .distinct()
+                        .sorted()
+                        .collect(Collectors.toList());
                 classMethods.merge(className, methods, (existing, newMethods) -> {
                     Set<String> combined = new HashSet<>(existing);
                     combined.addAll(newMethods);
-                    return new ArrayList<>(combined);
+                    return combined.stream().sorted().collect(Collectors.toList());
                 });
             }
-            
+
             return classMethods;
         } catch (Exception e) {
             logger.warn("Failed to get magic class methods", e);
@@ -341,6 +428,32 @@ public class MagicTextDocumentService implements TextDocumentService {
         logger.info("Document saved: {}", params.getTextDocument().getUri());
     }
 
+    /**
+     * LSP 3.17 pull diagnostics implementation.
+     * VS Code will call textDocument/diagnostic when the server advertises DiagnosticProvider.
+     */
+    @Override
+    public CompletableFuture<DocumentDiagnosticReport> diagnostic(DocumentDiagnosticParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            String uri = params != null && params.getTextDocument() != null ? params.getTextDocument().getUri() : null;
+            TextDocumentItem document = uri != null ? documents.get(uri) : null;
+            String content = document != null ? document.getText() : "";
+
+            List<Diagnostic> diagnostics = validateDocumentContent(content);
+
+            RelatedFullDocumentDiagnosticReport full = new RelatedFullDocumentDiagnosticReport(diagnostics);
+            try {
+                if (document != null) {
+                    full.setResultId(String.valueOf(document.getVersion()));
+                }
+            } catch (Throwable ignore) {
+                // resultId is optional; ignore if setter not available
+            }
+
+            return new DocumentDiagnosticReport(full);
+        });
+    }
+
     @Override
     public CompletableFuture<Either<List<CompletionItem>, CompletionList>> completion(CompletionParams params) {
         return CompletableFuture.supplyAsync(() -> {
@@ -379,6 +492,15 @@ public class MagicTextDocumentService implements TextDocumentService {
             return Either.forLeft(items);
         });
     }
+
+    /**
+     * Completion resolve handler. VSCode calls this when resolveProvider=true.
+     * For now, we return the item as-is. You can enrich documentation or details here.
+     */
+    @Override
+    public CompletableFuture<CompletionItem> resolveCompletionItem(CompletionItem params) {
+        return CompletableFuture.completedFuture(params);
+    }
     
     private String analyzeContext(TextDocumentItem document, Position position) {
         if (document == null) {
@@ -415,6 +537,28 @@ public class MagicTextDocumentService implements TextDocumentService {
             item.setInsertTextFormat(InsertTextFormat.Snippet);
             items.add(item);
         }
+
+        // 模块导入建议（不使用引号，语法：import module as alias）
+        ensureMagicCaches();
+        for (String moduleName : cachedModuleNames) {
+            CompletionItem item = new CompletionItem(moduleName);
+            item.setKind(CompletionItemKind.Module);
+            item.setDetail("Magic Script 模块");
+            item.setInsertText(moduleName + " as ${1:" + moduleName + "}");
+            item.setInsertTextFormat(InsertTextFormat.Snippet);
+            items.add(item);
+        }
+
+        // 函数导入建议（语法：import '@function' as alias）
+        for (String function : getMagicFunctions()) {
+            String label = "@" + function;
+            CompletionItem item = new CompletionItem(label);
+            item.setKind(CompletionItemKind.Function);
+            item.setDetail("导入函数");
+            item.setInsertText("'@" + function + "' as ${1:" + function + "}");
+            item.setInsertTextFormat(InsertTextFormat.Snippet);
+            items.add(item);
+        }
     }
     
     private void addMethodCompletions(List<CompletionItem> items, String context) {
@@ -441,11 +585,21 @@ public class MagicTextDocumentService implements TextDocumentService {
     
     private void addMethodsForType(List<CompletionItem> items, String typeName, Map<String, List<String>> classMethods) {
         List<String> methods = classMethods.get(typeName);
+        Map<String, List<ScriptMethod>> detailed = getMagicClassMethodDetails();
+        List<ScriptMethod> classDetail = detailed.getOrDefault(typeName, Collections.emptyList());
         if (methods != null) {
             for (String method : methods) {
                 CompletionItem item = new CompletionItem(method);
                 item.setKind(CompletionItemKind.Method);
-                item.setDetail(typeName + " method");
+                // 选择首个重载用于展示细节
+                ScriptMethod first = null;
+                for (ScriptMethod cand : classDetail) {
+                    if (method.equals(cand.getName())) {
+                        first = cand;
+                        break;
+                    }
+                }
+                item.setDetail(first != null ? (typeName + " " + formatMethodSignature(first)) : (typeName + " method"));
                 item.setInsertText(method + "(${1})");
                 item.setInsertTextFormat(InsertTextFormat.Snippet);
                 items.add(item);
@@ -683,22 +837,46 @@ public class MagicTextDocumentService implements TextDocumentService {
                         return new Hover(content);
                     }
                     
-                    // 检查是否是函数
-                    List<String> functions = getMagicFunctions();
-                    if (functions.contains(word)) {
+                    // 检查是否是函数（展示详细签名）
+                    Map<String, List<ScriptMethod>> funcDetails = getMagicFunctionDetails();
+                    List<ScriptMethod> overloads = funcDetails.get(word);
+                    if (overloads != null && !overloads.isEmpty()) {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("**Magic Script Function**: `").append(word).append("`\n\n");
+                        for (ScriptMethod m : overloads) {
+                            sb.append("- ").append(formatMethodSignature(m)).append("\n");
+                            if (m.getComment() != null && !m.getComment().isEmpty()) {
+                                sb.append("  ").append(m.getComment()).append("\n");
+                            }
+                        }
                         MarkupContent content = new MarkupContent();
                         content.setKind(MarkupKind.MARKDOWN);
-                        content.setValue("**Magic Script Function**: `" + word + "()`\n\n" + getFunctionDescription(word));
+                        content.setValue(sb.toString());
                         return new Hover(content);
                     }
                     
-                    // 检查是否是类方法
-                    Map<String, List<String>> classMethods = getMagicClassMethods();
-                    for (Map.Entry<String, List<String>> entry : classMethods.entrySet()) {
-                        if (entry.getValue().contains(word)) {
+                    // 检查是否是类方法（展示详细签名）
+                    Map<String, List<ScriptMethod>> classDetails = getMagicClassMethodDetails();
+                    for (Map.Entry<String, List<ScriptMethod>> entry : classDetails.entrySet()) {
+                        List<ScriptMethod> ms = entry.getValue();
+                        boolean match = false;
+                        StringBuilder sb = new StringBuilder();
+                        for (ScriptMethod m : ms) {
+                            if (word.equals(m.getName())) {
+                                if (!match) {
+                                    sb.append("**").append(entry.getKey()).append(" Method**: `").append(word).append("`\n\n");
+                                    match = true;
+                                }
+                                sb.append("- ").append(formatMethodSignature(m)).append("\n");
+                                if (m.getComment() != null && !m.getComment().isEmpty()) {
+                                    sb.append("  ").append(m.getComment()).append("\n");
+                                }
+                            }
+                        }
+                        if (match) {
                             MarkupContent content = new MarkupContent();
                             content.setKind(MarkupKind.MARKDOWN);
-                            content.setValue("**" + entry.getKey() + " Method**: `" + word + "()`\n\n扩展方法，用于 " + entry.getKey() + " 类型的对象");
+                            content.setValue(sb.toString());
                             return new Hover(content);
                         }
                     }

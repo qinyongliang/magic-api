@@ -12,7 +12,6 @@ import javax.websocket.OnClose;
 import javax.websocket.OnError;
 import javax.websocket.OnOpen;
 import javax.websocket.Session;
-import java.util.concurrent.Future;
 import java.util.concurrent.Executors;
 
 /**
@@ -23,8 +22,6 @@ import java.util.concurrent.Executors;
 public class DebugEndpoint {
 
     private static final Logger logger = LoggerFactory.getLogger(DebugEndpoint.class);
-
-    private volatile Future<?> listening;
 
     @OnOpen
     public void onOpen(Session session) {
@@ -40,8 +37,8 @@ public class DebugEndpoint {
             Launcher<IDebugProtocolClient> launcher = builder.create();
             IDebugProtocolClient client = launcher.getRemoteProxy();
             adapter.connect(client);
-            listening = launcher.startListening();
-            logger.info("Debug WebSocket session {} started listening", session.getId());
+            // WebSocketLauncherBuilder 已注册 message handlers，勿调用 startListening()
+            logger.info("Debug WebSocket session {} initialized (handlers attached)", session.getId());
         } catch (Throwable t) {
             logger.error("Failed to start Debug over WebSocket for session {}", session.getId(), t);
             try { session.close(); } catch (Throwable ignored) {}
@@ -56,9 +53,5 @@ public class DebugEndpoint {
     @OnClose
     public void onClose(Session session) {
         logger.info("Debug WebSocket connection closed: {}", session.getId());
-        Future<?> f = listening;
-        if (f != null) {
-            try { f.cancel(true); } catch (Throwable ignored) {}
-        }
     }
 }
