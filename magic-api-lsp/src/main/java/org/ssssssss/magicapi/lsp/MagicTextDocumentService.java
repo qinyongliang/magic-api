@@ -1,9 +1,10 @@
 package org.ssssssss.magicapi.lsp;
 
 import org.eclipse.lsp4j.*;
+import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.services.LanguageClient;
 import org.eclipse.lsp4j.services.TextDocumentService;
-import org.eclipse.lsp4j.jsonrpc.messages.Either;
+// Use fully-qualified Either to avoid classpath ambiguities
 // 明确导入语义高亮相关类
 import org.eclipse.lsp4j.SemanticTokens;
 import org.eclipse.lsp4j.SemanticTokensParams;
@@ -22,6 +23,17 @@ import org.ssssssss.script.exception.MagicScriptException;
 import org.ssssssss.script.compile.MagicScriptCompileException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.ssssssss.magicapi.lsp.provider.DiagnosticsProvider;
+import org.ssssssss.magicapi.lsp.provider.CodeLensProvider;
+import org.ssssssss.magicapi.lsp.provider.SemanticTokensProvider;
+import org.ssssssss.magicapi.lsp.provider.HoverProvider;
+import org.ssssssss.magicapi.lsp.provider.DocumentSymbolProvider;
+import org.ssssssss.magicapi.lsp.provider.DefinitionProvider;
+import org.ssssssss.magicapi.lsp.provider.ReferenceProvider;
+import org.ssssssss.magicapi.lsp.provider.HighlightProvider;
+import org.ssssssss.magicapi.lsp.provider.FoldingProvider;
+import org.ssssssss.magicapi.lsp.provider.FormattingProvider;
+import org.ssssssss.magicapi.lsp.provider.RenameProvider;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -41,6 +53,17 @@ public class MagicTextDocumentService implements TextDocumentService {
     
     // LSP客户端引用
     private LanguageClient client;
+    private final DiagnosticsProvider diagnosticsProvider = new DiagnosticsProvider();
+    private final CodeLensProvider codeLensProvider = new CodeLensProvider(diagnosticsProvider);
+    private final SemanticTokensProvider semanticTokensProvider = new SemanticTokensProvider();
+    private final HoverProvider hoverProvider = new HoverProvider();
+    private final DocumentSymbolProvider documentSymbolProvider = new DocumentSymbolProvider();
+    private final DefinitionProvider definitionProvider = new DefinitionProvider();
+    private final ReferenceProvider referenceProvider = new ReferenceProvider();
+    private final HighlightProvider highlightProvider = new HighlightProvider();
+    private final FoldingProvider foldingProvider = new FoldingProvider();
+    private final FormattingProvider formattingProvider = new FormattingProvider();
+    private final RenameProvider renameProvider = new RenameProvider();
 
     // Magic 引擎数据缓存，降低频繁构建开销
     private volatile Map<String, ScriptClass> cachedScriptClasses;
@@ -185,123 +208,47 @@ public class MagicTextDocumentService implements TextDocumentService {
     
     // 动态获取Magic Script函数
     private List<String> getMagicFunctions() {
-        try {
-            ensureMagicCaches();
-            return cachedFunctions.stream()
-                .map(ScriptMethod::getName)
-                .distinct()
-                .sorted()
-                .collect(Collectors.toList());
-        } catch (Exception e) {
-            logger.warn("Failed to get magic functions", e);
-            return getDefaultMagicFunctions();
-        }
-    }
-    
-    // 默认Magic Script函数（作为备用）
-    private List<String> getDefaultMagicFunctions() {
-        return Arrays.asList(
-            // 基础函数
-            "uuid", "not_null", "is_null", "print", "println", "printf",
-            // 数学函数
-            "round", "ceil", "floor", "percent", "abs", "max", "min", "sum", "avg",
-            // 日期函数
-            "date_format", "now", "timestamp", "timestamp_ms", 
-            // 字符串函数
-            "ifnull", "not_blank", "is_blank", "trim", "substring", "replace",
-            // 集合函数
-            "count", "group_concat", "range", "new_array", "new_int_array", "new_string_array",
-            // LINQ聚合函数
-            "count", "max", "min", "sum", "avg", "first", "last", "distinct",
-            // 类型转换
-            "asBean", "asList", "asString", "asInt", "asLong", "asDouble", "asBoolean"
-        );
+        ensureMagicCaches();
+        return cachedFunctions.stream()
+            .map(ScriptMethod::getName)
+            .distinct()
+            .sorted()
+            .collect(Collectors.toList());
     }
     
     // 动态获取Magic Script类和扩展方法
     private Map<String, List<String>> getMagicClassMethods() {
-        try {
-            ensureMagicCaches();
-            Map<String, List<String>> classMethods = new HashMap<>();
 
-            // 基础类方法
-            for (Map.Entry<String, ScriptClass> entry : cachedScriptClasses.entrySet()) {
-                String className = entry.getKey();
-                ScriptClass scriptClass = entry.getValue();
-                List<String> methods = scriptClass.getMethods().stream()
-                        .map(ScriptMethod::getName)
-                        .distinct()
-                        .sorted()
-                        .collect(Collectors.toList());
-                classMethods.put(className, methods);
-            }
-
-            // 扩展方法
-            for (Map.Entry<String, ScriptClass> entry : cachedExtensionClasses.entrySet()) {
-                String className = entry.getKey();
-                ScriptClass scriptClass = entry.getValue();
-                List<String> methods = scriptClass.getMethods().stream()
-                        .map(ScriptMethod::getName)
-                        .distinct()
-                        .sorted()
-                        .collect(Collectors.toList());
-                classMethods.merge(className, methods, (existing, newMethods) -> {
-                    Set<String> combined = new HashSet<>(existing);
-                    combined.addAll(newMethods);
-                    return combined.stream().sorted().collect(Collectors.toList());
-                });
-            }
-
-            return classMethods;
-        } catch (Exception e) {
-            logger.warn("Failed to get magic class methods", e);
-            return getDefaultClassMethods();
-        }
-    }
-    
-    // 默认类方法（作为备用）
-    private Map<String, List<String>> getDefaultClassMethods() {
+        ensureMagicCaches();
         Map<String, List<String>> classMethods = new HashMap<>();
-        
-        // String扩展方法
-        classMethods.put("String", Arrays.asList(
-            "match", "replace", "split", "substring", "toLowerCase", "toUpperCase",
-            "trim", "length", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith",
-            "contains", "isEmpty", "isBlank", "replaceAll", "replaceFirst"
-        ));
-        
-        // List/Collection扩展方法 - 基于StreamExtension
-        classMethods.put("List", Arrays.asList(
-            // 基础操作
-            "add", "remove", "size", "isEmpty", "contains", "get", "set", "clear",
-            // 函数式操作
-            "map", "filter", "forEach", "find", "findIndex", "reduce", "some", "every",
-            // 聚合操作
-            "max", "min", "avg", "sum", "count", "distinct", "sort", "reverse", "shuffle",
-            // 转换操作
-            "join", "concat", "slice", "skip", "limit", "take", "drop",
-            // 分组操作
-            "groupBy", "group", "toMap", "asBean", "asList", "asString",
-            // 循环操作
-            "each", "push", "pop", "shift", "unshift"
-        ));
-        
-        // Map扩展方法 - 基于MapExtension
-        classMethods.put("Map", Arrays.asList(
-            // 基础操作
-            "put", "get", "remove", "containsKey", "containsValue", "keySet",
-            "values", "entrySet", "size", "isEmpty", "clear",
-            // 转换操作
-            "asBean", "asList", "asString", "toMap", "merge",
-            // 循环操作
-            "each", "forEach", "sort", "replaceKey", "replaceAllKey"
-        ));
-        
-        // Array扩展方法
-        classMethods.put("Array", Arrays.asList(
-            "length", "get", "set", "asList", "asString", "join", "slice"
-        ));
-        
+
+        // 基础类方法
+        for (Map.Entry<String, ScriptClass> entry : cachedScriptClasses.entrySet()) {
+            String className = entry.getKey();
+            ScriptClass scriptClass = entry.getValue();
+            List<String> methods = scriptClass.getMethods().stream()
+                    .map(ScriptMethod::getName)
+                    .distinct()
+                    .sorted()
+                    .collect(Collectors.toList());
+            classMethods.put(className, methods);
+        }
+
+        // 扩展方法
+        for (Map.Entry<String, ScriptClass> entry : cachedExtensionClasses.entrySet()) {
+            String className = entry.getKey();
+            ScriptClass scriptClass = entry.getValue();
+            List<String> methods = scriptClass.getMethods().stream()
+                    .map(ScriptMethod::getName)
+                    .distinct()
+                    .sorted()
+                    .collect(Collectors.toList());
+            classMethods.merge(className, methods, (existing, newMethods) -> {
+                Set<String> combined = new HashSet<>(existing);
+                combined.addAll(newMethods);
+                return combined.stream().sorted().collect(Collectors.toList());
+            });
+        }
         return classMethods;
     }
 
@@ -370,7 +317,7 @@ public class MagicTextDocumentService implements TextDocumentService {
         updateParseResult(document.getUri(), document.getText());
         
         // 执行语法检查并发布诊断信息
-        publishDiagnostics(document.getUri(), document.getText());
+        diagnosticsProvider.publishDiagnostics(client, document.getUri(), document.getText());
     }
 
     @Override
@@ -396,7 +343,7 @@ public class MagicTextDocumentService implements TextDocumentService {
             updateParseResult(uri, document.getText());
             
             // 重新验证文档并发布诊断信息
-            publishDiagnostics(uri, document.getText());
+            diagnosticsProvider.publishDiagnostics(client, uri, document.getText());
 
             // 动态刷新语义标记与 CodeLens
             try {
@@ -449,7 +396,7 @@ public class MagicTextDocumentService implements TextDocumentService {
             TextDocumentItem document = uri != null ? documents.get(uri) : null;
             String content = document != null ? document.getText() : "";
 
-            List<Diagnostic> diagnostics = validateDocumentContent(content);
+            List<Diagnostic> diagnostics = diagnosticsProvider.validateDocumentContent(content);
 
             RelatedFullDocumentDiagnosticReport full = new RelatedFullDocumentDiagnosticReport(diagnostics);
             try {
@@ -814,86 +761,23 @@ public class MagicTextDocumentService implements TextDocumentService {
         return CompletableFuture.supplyAsync(() -> {
             String documentUri = params.getTextDocument().getUri();
             TextDocumentItem document = documents.get(documentUri);
-            
-            if (document != null) {
+            if (document == null) return null;
                 String text = document.getText();
                 Position position = params.getPosition();
-                
-                // 获取光标位置的单词
-                String word = getWordAtPosition(text, position);
-                
-                if (word != null && !word.isEmpty()) {
-                    // 检查是否是关键字
-                    if (MAGIC_KEYWORDS.contains(word)) {
-                        MarkupContent content = new MarkupContent();
-                        content.setKind(MarkupKind.MARKDOWN);
-                        content.setValue("**Magic Script Keyword**: `" + word + "`\n\n" + getKeywordDescription(word));
-                        return new Hover(content);
-                    }
-                    
-                    // 检查是否是LINQ关键字
-                    if (LINQ_KEYWORDS.contains(word)) {
-                        MarkupContent content = new MarkupContent();
-                        content.setKind(MarkupKind.MARKDOWN);
-                        content.setValue("**Magic Script LINQ Keyword**: `" + word + "`\n\nLINQ查询关键字，用于数据查询和操作");
-                        return new Hover(content);
-                    }
-                    
-                    // 检查是否是操作符
-                    if (OPERATORS.contains(word)) {
-                        MarkupContent content = new MarkupContent();
-                        content.setKind(MarkupKind.MARKDOWN);
-                        content.setValue("**Magic Script Operator**: `" + word + "`\n\n" + getOperatorDescription(word));
-                        return new Hover(content);
-                    }
-                    
-                    // 检查是否是函数（展示详细签名）
-                    Map<String, List<ScriptMethod>> funcDetails = getMagicFunctionDetails();
-                    List<ScriptMethod> overloads = funcDetails.get(word);
-                    if (overloads != null && !overloads.isEmpty()) {
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("**Magic Script Function**: `").append(word).append("`\n\n");
-                        for (ScriptMethod m : overloads) {
-                            sb.append("- ").append(formatMethodSignature(m)).append("\n");
-                            if (m.getComment() != null && !m.getComment().isEmpty()) {
-                                sb.append("  ").append(m.getComment()).append("\n");
-                            }
-                        }
-                        MarkupContent content = new MarkupContent();
-                        content.setKind(MarkupKind.MARKDOWN);
-                        content.setValue(sb.toString());
-                        return new Hover(content);
-                    }
-                    
-                    // 检查是否是类方法（展示详细签名）
-                    Map<String, List<ScriptMethod>> classDetails = getMagicClassMethodDetails();
-                    for (Map.Entry<String, List<ScriptMethod>> entry : classDetails.entrySet()) {
-                        List<ScriptMethod> ms = entry.getValue();
-                        boolean match = false;
-                        StringBuilder sb = new StringBuilder();
-                        for (ScriptMethod m : ms) {
-                            if (word.equals(m.getName())) {
-                                if (!match) {
-                                    sb.append("**").append(entry.getKey()).append(" Method**: `").append(word).append("`\n\n");
-                                    match = true;
-                                }
-                                sb.append("- ").append(formatMethodSignature(m)).append("\n");
-                                if (m.getComment() != null && !m.getComment().isEmpty()) {
-                                    sb.append("  ").append(m.getComment()).append("\n");
-                                }
-                            }
-                        }
-                        if (match) {
-                            MarkupContent content = new MarkupContent();
-                            content.setKind(MarkupKind.MARKDOWN);
-                            content.setValue(sb.toString());
-                            return new Hover(content);
-                        }
-                    }
-                }
-            }
-            
-            return null;
+            // 确保模块名缓存已初始化
+            ensureMagicCaches();
+            return hoverProvider.generateHover(
+                    text,
+                    position,
+                    MAGIC_KEYWORDS,
+                    LINQ_KEYWORDS,
+                    OPERATORS,
+                    getMagicFunctionDetails(),
+                    getMagicClassMethodDetails(),
+                    this::getKeywordDescription,
+                    this::getOperatorDescription,
+                    cachedModuleNames
+            );
         });
     }
     
@@ -961,66 +845,15 @@ public class MagicTextDocumentService implements TextDocumentService {
     }
 
     @Override
-    public CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> documentSymbol(DocumentSymbolParams params) {
+    public CompletableFuture<List<org.eclipse.lsp4j.jsonrpc.messages.Either<SymbolInformation, DocumentSymbol>>> documentSymbol(DocumentSymbolParams params) {
         return CompletableFuture.supplyAsync(() -> {
-            List<Either<SymbolInformation, DocumentSymbol>> symbols = new ArrayList<>();
-            
             String documentUri = params.getTextDocument().getUri();
             TextDocumentItem document = documents.get(documentUri);
-            
-            if (document != null) {
-                String text = document.getText();
-                String[] lines = text.split("\n");
-                
-                // 简单的符号提取（函数定义、变量定义等）
-                for (int i = 0; i < lines.length; i++) {
-                    String line = lines[i].trim();
-                    
-                    // 提取函数定义
-                    if (line.startsWith("function ") || line.contains(" function ")) {
-                        String functionName = extractFunctionName(line);
-                        if (functionName != null) {
-                            Range range = new Range(new Position(i, 0), new Position(i, line.length()));
-                            DocumentSymbol symbol = new DocumentSymbol();
-                            symbol.setName(functionName);
-                            symbol.setKind(SymbolKind.Function);
-                            symbol.setRange(range);
-                            symbol.setSelectionRange(range);
-                            symbols.add(Either.forRight(symbol));
-                        }
-                    }
-                    
-                    // 提取变量定义
-                    if (line.startsWith("var ") || line.startsWith("let ") || line.startsWith("const ")) {
-                        String variableName = extractVariableName(line);
-                        if (variableName != null) {
-                            Range range = new Range(new Position(i, 0), new Position(i, line.length()));
-                            DocumentSymbol symbol = new DocumentSymbol();
-                            symbol.setName(variableName);
-                            symbol.setKind(SymbolKind.Variable);
-                            symbol.setRange(range);
-                            symbol.setSelectionRange(range);
-                            symbols.add(Either.forRight(symbol));
-                        }
-                    }
-                    
-                    // 提取import语句
-                    if (line.startsWith("import ")) {
-                        String importName = extractImportName(line);
-                        if (importName != null) {
-                            Range range = new Range(new Position(i, 0), new Position(i, line.length()));
-                            DocumentSymbol symbol = new DocumentSymbol();
-                            symbol.setName(importName);
-                            symbol.setKind(SymbolKind.Module);
-                            symbol.setRange(range);
-                            symbol.setSelectionRange(range);
-                            symbols.add(Either.forRight(symbol));
-                        }
-                    }
-                }
+            if (document == null) {
+                return new ArrayList<>();
             }
-            
-            return symbols;
+            String text = document.getText();
+            return documentSymbolProvider.generate(text);
         });
     }
     
@@ -1060,183 +893,32 @@ public class MagicTextDocumentService implements TextDocumentService {
     }
     
     // 辅助方法：提取函数名
-    private String extractFunctionName(String line) {
-        // 简单的函数名提取
-        String[] parts = line.split("\\s+");
-        for (int i = 0; i < parts.length - 1; i++) {
-            if ("function".equals(parts[i]) && i + 1 < parts.length) {
-                String name = parts[i + 1];
-                // 移除括号
-                int parenIndex = name.indexOf('(');
-                if (parenIndex > 0) {
-                    name = name.substring(0, parenIndex);
-                }
-                return name;
-            }
-        }
-        return null;
-    }
     
-    // 辅助方法：提取变量名
-    private String extractVariableName(String line) {
-        String[] parts = line.split("\\s+");
-        if (parts.length >= 2) {
-            String name = parts[1];
-            // 移除赋值符号
-            int assignIndex = name.indexOf('=');
-            if (assignIndex > 0) {
-                name = name.substring(0, assignIndex);
-            }
-            return name;
-        }
-        return null;
-    }
-    
-    // 辅助方法：提取import名称
-    private String extractImportName(String line) {
-        // 提取 import 'xxx' as yyy 中的 yyy，或者 import xxx 中的 xxx
-        if (line.contains(" as ")) {
-            String[] parts = line.split(" as ");
-            if (parts.length >= 2) {
-                return parts[1].trim();
-            }
-        } else {
-            String[] parts = line.split("\\s+");
-            if (parts.length >= 2) {
-                String name = parts[1];
-                // 移除引号
-                name = name.replace("'", "").replace("\"", "");
-                // 提取类名
-                if (name.contains(".")) {
-                    name = name.substring(name.lastIndexOf('.') + 1);
-                }
-                return name;
-            }
-        }
-        return null;
-    }
     
     /**
      * 验证文档并生成诊断信息
      */
-    private List<Diagnostic> validateDocumentContent(String content) {
-        List<Diagnostic> diagnostics = new ArrayList<>();
-        
-        try {
-            // 使用magic-script的Parser进行语法解析
-            Parser parser = new Parser();
-            List<Node> nodes = parser.parse(content);
-            
-            // 如果解析成功，检查是否有语义错误
-            // 这里可以添加更多的语义检查逻辑
-            
-        } catch (MagicScriptException e) {
-            // 将MagicScriptException转换为LSP Diagnostic
-            Diagnostic diagnostic = convertExceptionToDiagnostic(e, content);
-            if (diagnostic != null) {
-                diagnostics.add(diagnostic);
-            }
-        } catch (MagicScriptCompileException e) {
-            // 处理编译异常
-            Diagnostic diagnostic = convertCompileExceptionToDiagnostic(e, content);
-            if (diagnostic != null) {
-                diagnostics.add(diagnostic);
-            }
-        } catch (Exception e) {
-            // 处理其他异常
-            Diagnostic diagnostic = new Diagnostic();
-            diagnostic.setRange(new Range(new Position(0, 0), new Position(0, 0)));
-            diagnostic.setSeverity(DiagnosticSeverity.Error);
-            diagnostic.setMessage("语法解析错误: " + e.getMessage());
-            diagnostic.setSource("magic-script");
-            diagnostics.add(diagnostic);
-        }
-        
-        return diagnostics;
-    }
+    
     
     /**
      * 将MagicScriptException转换为LSP Diagnostic
      */
-    private Diagnostic convertExceptionToDiagnostic(MagicScriptException e, String content) {
-        Span location = e.getLocation();
-        if (location == null) {
-            return null;
-        }
-        
-        Diagnostic diagnostic = new Diagnostic();
-        
-        // 转换位置信息
-        Range range = convertSpanToRange(location, content);
-        diagnostic.setRange(range);
-        
-        // 设置严重程度
-        diagnostic.setSeverity(DiagnosticSeverity.Error);
-        
-        // 设置消息
-        diagnostic.setMessage(e.getSimpleMessage() != null ? e.getSimpleMessage() : e.getMessage());
-        
-        // 设置来源
-        diagnostic.setSource("magic-script");
-        
-        return diagnostic;
-    }
+    
     
     /**
      * 将MagicScriptCompileException转换为LSP Diagnostic
      */
-    private Diagnostic convertCompileExceptionToDiagnostic(MagicScriptCompileException e, String content) {
-        Diagnostic diagnostic = new Diagnostic();
-        
-        // 如果有嵌套的MagicScriptException，尝试提取位置信息
-        Throwable cause = e.getCause();
-        if (cause instanceof MagicScriptException) {
-            MagicScriptException mse = (MagicScriptException) cause;
-            return convertExceptionToDiagnostic(mse, content);
-        }
-        
-        // 默认位置为文档开始
-        diagnostic.setRange(new Range(new Position(0, 0), new Position(0, 0)));
-        diagnostic.setSeverity(DiagnosticSeverity.Error);
-        diagnostic.setMessage("编译错误: " + e.getMessage());
-        diagnostic.setSource("magic-script");
-        
-        return diagnostic;
-    }
+    
     
     /**
      * 将Span转换为LSP Range
      */
-    private Range convertSpanToRange(Span span, String content) {
-        Span.Line line = span.getLine();
-        
-        // LSP使用0基索引，而magic-script使用1基索引
-        int startLine = Math.max(0, line.getLineNumber() - 1);
-        int endLine = Math.max(0, line.getEndLineNumber() - 1);
-        int startCol = Math.max(0, line.getStartCol() - 1);
-        int endCol = Math.max(0, line.getEndCol());
-        
-        Position start = new Position(startLine, startCol);
-        Position end = new Position(endLine, endCol);
-        
-        return new Range(start, end);
-    }
+    
     
     /**
      * 发布诊断信息到客户端
      */
-    private void publishDiagnostics(String uri, String content) {
-        List<Diagnostic> diagnostics = validateDocumentContent(content);
-        
-        PublishDiagnosticsParams params = new PublishDiagnosticsParams();
-        params.setUri(uri);
-        params.setDiagnostics(diagnostics);
-        
-        // 发送诊断信息到客户端
-        if (client != null) {
-            client.publishDiagnostics(params);
-        }
-    }
+    
 
 
     @Override
@@ -1248,13 +930,9 @@ public class MagicTextDocumentService implements TextDocumentService {
             
             if (document != null) {
                 String text = document.getText();
-                
-                // 获取光标位置的单词
                 String word = getWordAtPosition(text, position);
-                
                 if (word != null && !word.isEmpty()) {
-                    // 查找定义位置
-                    List<Location> definitions = findDefinitions(word, text, documentUri);
+                    List<Location> definitions = definitionProvider.findDefinitions(word, text, documentUri);
                     if (!definitions.isEmpty()) {
                         return Either.forLeft(definitions);
                     }
@@ -1427,7 +1105,7 @@ public class MagicTextDocumentService implements TextDocumentService {
             
             return new ParseResult(nodes, rootScope, lineScopes);
         } catch (Exception e) {
-            logger.warn("Failed to parse document with scope", e);
+            logger.debug("Failed to parse document with scope", e);
             return new ParseResult(Collections.emptyList(), new VarScope(), new HashMap<>());
         }
     }
@@ -2161,8 +1839,14 @@ public class MagicTextDocumentService implements TextDocumentService {
                 if (content == null) {
                     return new SemanticTokens(Collections.emptyList());
                 }
-
-                List<Integer> tokens = generateSemanticTokens(content, uri);
+                ParseResult parseResult = parseResults.get(uri);
+                Map<Integer, VarScope> lineScopes = parseResult != null ? parseResult.getLineScopes() : null;
+                List<Integer> tokens = semanticTokensProvider.generateSemanticTokens(
+                        content,
+                        uri,
+                        lineScopes,
+                        getMagicFunctions()
+                );
                 return new SemanticTokens(tokens);
             } catch (Exception e) {
                 logger.error("Error generating semantic tokens", e);
@@ -2182,7 +1866,15 @@ public class MagicTextDocumentService implements TextDocumentService {
                 }
 
                 Range range = params.getRange();
-                List<Integer> tokens = generateSemanticTokensForRange(content, uri, range);
+                ParseResult parseResult = parseResults.get(uri);
+                Map<Integer, VarScope> lineScopes = parseResult != null ? parseResult.getLineScopes() : null;
+                List<Integer> tokens = semanticTokensProvider.generateSemanticTokensForRange(
+                        content,
+                        uri,
+                        range,
+                        lineScopes,
+                        getMagicFunctions()
+                );
                 return new SemanticTokens(tokens);
             } catch (Exception e) {
                 logger.error("Error generating semantic tokens for range", e);
@@ -2729,32 +2421,166 @@ public class MagicTextDocumentService implements TextDocumentService {
             if (content == null) {
                 return Collections.emptyList();
             }
-
-            List<CodeLens> lenses = new ArrayList<>();
-            String[] lines = content.split("\n", -1);
-
-            // 顶部显示诊断数量的 CodeLens
-            List<Diagnostic> diagnostics = validateDocumentContent(content);
-            Command diagCmd = new Command("问题: " + diagnostics.size(), "magicApi.refreshFileInfo",
-                    Collections.singletonList(uri));
-            lenses.add(new CodeLens(new Range(new Position(0, 0), new Position(0, 0)), diagCmd, null));
-
-            // 在包含 function 的行添加“测试 API” CodeLens
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i];
-                if (line.matches(".*\\bfunction\\b.*")) {
-                    Command cmd = new Command("测试 API", "magicApi.testApi", Collections.singletonList(uri));
-                    lenses.add(new CodeLens(new Range(new Position(i, 0), new Position(i, Math.max(0, line.length()))), cmd, null));
-                }
-            }
-
-            return lenses;
+            return codeLensProvider.generateCodeLenses(uri, content);
         });
     }
 
     @Override
     public CompletableFuture<CodeLens> resolveCodeLens(CodeLens unresolved) {
-        return CompletableFuture.completedFuture(unresolved);
+        return CompletableFuture.completedFuture(codeLensProvider.resolveCodeLens(unresolved));
+    }
+
+    // ==================== References ====================
+    @Override
+    public CompletableFuture<List<? extends Location>> references(ReferenceParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                Position position = params.getPosition();
+
+                // 首先尝试使用基于作用域的引用查找
+                List<Location> scopeBasedReferences = findReferencesWithScope(uri, position);
+                if (!scopeBasedReferences.isEmpty()) {
+                    return scopeBasedReferences;
+                }
+
+                // 回退到基于 Provider 的查找
+                String content = getDocumentContent(uri);
+                if (content == null) {
+                    return Collections.emptyList();
+                }
+                String symbol = referenceProvider.getSymbolAtPosition(content, position);
+                if (symbol == null || symbol.trim().isEmpty()) {
+                    return Collections.emptyList();
+                }
+                return referenceProvider.findReferences(symbol, uri);
+            } catch (Exception e) {
+                logger.error("Error finding references", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    // ==================== Document Highlight ====================
+    @Override
+    public CompletableFuture<List<? extends DocumentHighlight>> documentHighlight(DocumentHighlightParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                Position position = params.getPosition();
+
+                String content = getDocumentContent(uri);
+                if (content == null) {
+                    return Collections.emptyList();
+                }
+                String symbol = referenceProvider.getSymbolAtPosition(content, position);
+                if (symbol == null || symbol.trim().isEmpty()) {
+                    return Collections.emptyList();
+                }
+                List<DocumentHighlight> highlights = highlightProvider.findSymbolHighlights(content, symbol);
+                return highlights;
+            } catch (Exception e) {
+                logger.error("Error during document highlight", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    // ==================== Formatting ====================
+    @Override
+    public CompletableFuture<List<? extends TextEdit>> formatting(DocumentFormattingParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                FormattingOptions options = params.getOptions();
+                String content = getDocumentContent(uri);
+                return formattingProvider.formatDocument(content, options);
+            } catch (Exception e) {
+                logger.error("Error during document formatting", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<List<? extends TextEdit>> rangeFormatting(DocumentRangeFormattingParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                Range range = params.getRange();
+                FormattingOptions options = params.getOptions();
+                String content = getDocumentContent(uri);
+                return formattingProvider.formatRange(content, range, options);
+            } catch (Exception e) {
+                logger.error("Error during range formatting", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<List<? extends TextEdit>> onTypeFormatting(DocumentOnTypeFormattingParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                Position position = params.getPosition();
+                String ch = params.getCh();
+                FormattingOptions options = params.getOptions();
+                String content = getDocumentContent(uri);
+                return formattingProvider.formatOnType(content, position, ch, options);
+            } catch (Exception e) {
+                logger.error("Error during on-type formatting", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    // ==================== Folding Range ====================
+    @Override
+    public CompletableFuture<List<FoldingRange>> foldingRange(FoldingRangeRequestParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                String content = getDocumentContent(uri);
+                if (content == null) {
+                    return Collections.emptyList();
+                }
+                return foldingProvider.createFoldingRanges(content);
+            } catch (Exception e) {
+                logger.error("Error creating folding ranges", e);
+                return Collections.emptyList();
+            }
+        });
+    }
+
+    // ==================== Rename ====================
+    @Override
+    public CompletableFuture<WorkspaceEdit> rename(RenameParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String uri = params.getTextDocument().getUri();
+                Position position = params.getPosition();
+                String newName = params.getNewName();
+
+                // 首先尝试使用基于作用域的重命名
+                Map<String, List<TextEdit>> scopeBasedChanges = renameWithScope(uri, position, newName);
+                if (scopeBasedChanges != null && !scopeBasedChanges.isEmpty()) {
+                    WorkspaceEdit scopeBasedEdit = new WorkspaceEdit();
+                    scopeBasedEdit.setChanges(scopeBasedChanges);
+                    return scopeBasedEdit;
+                }
+
+                // 回退到 Provider 逻辑
+                String content = getDocumentContent(uri);
+                if (content == null) {
+                    return new WorkspaceEdit();
+                }
+                return renameProvider.rename(content, position, newName, uri);
+            } catch (Exception e) {
+                logger.error("Error during rename operation", e);
+                return new WorkspaceEdit();
+            }
+        });
     }
 
     // ==================== 语义标记相关的内部类 ====================
