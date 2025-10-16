@@ -64,6 +64,11 @@ public class MagicLanguageServer implements LanguageServer, LanguageClientAware 
         // References support
         capabilities.setReferencesProvider(true);
 
+        // CodeLens provider support
+        CodeLensOptions codeLensOptions = new CodeLensOptions();
+        codeLensOptions.setResolveProvider(true);
+        capabilities.setCodeLensProvider(codeLensOptions);
+
         // Semantic tokens provider (full & range) with legend aligned to tokenizer
         SemanticTokensLegend legend = new SemanticTokensLegend(
                 java.util.Arrays.asList(

@@ -397,6 +397,16 @@ public class MagicTextDocumentService implements TextDocumentService {
             
             // 重新验证文档并发布诊断信息
             publishDiagnostics(uri, document.getText());
+
+            // 动态刷新语义标记与 CodeLens
+            try {
+                if (client != null) {
+                    client.refreshSemanticTokens();
+                    client.refreshCodeLenses();
+                }
+            } catch (Throwable t) {
+                logger.debug("Client refresh methods not available: {}", t.getMessage());
+            }
         }
     }
     
@@ -2190,10 +2200,68 @@ public class MagicTextDocumentService implements TextDocumentService {
         
         ParseResult parseResult = parseResults.get(uri);
         
+        boolean inTripleString = false;
+        int tripleStartLine = -1;
+        int tripleStartChar = 0;
+
         for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             String line = lines[lineIndex];
             VarScope currentScope = parseResult != null ? parseResult.lineScopes.get(lineIndex) : null;
-            analyzeLineForSemanticTokens(line, lineIndex, currentScope, semanticTokens, uri);
+
+            // 若当前不在三引号字符串内，且该行是 // 注释行，则直接按单行解析并跳过三引号逻辑
+            if (!inTripleString) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("//")) {
+                    analyzeLineForSemanticTokens(line, lineIndex, currentScope, semanticTokens, uri);
+                    continue;
+                }
+            }
+
+            if (inTripleString) {
+                int closeIdx = indexOfTripleQuote(line, 0);
+                if (closeIdx >= 0) {
+                    // 在三引号内，分段添加字符串与插值
+                    addStringAndInterpolationTokensInSegment(line, 0, closeIdx + 3, 0, lineIndex, semanticTokens);
+                    inTripleString = false;
+                    if (closeIdx + 3 < line.length()) {
+                        String rest = line.substring(closeIdx + 3);
+                        analyzeLineForSemanticTokens(rest, lineIndex, currentScope, semanticTokens, uri, closeIdx + 3);
+                    }
+                } else {
+                    addStringAndInterpolationTokensInSegment(line, 0, line.length(), 0, lineIndex, semanticTokens);
+                }
+                continue;
+            }
+
+            int openIdx = indexOfTripleQuote(line, 0);
+            if (openIdx < 0) {
+                analyzeLineForSemanticTokens(line, lineIndex, currentScope, semanticTokens, uri);
+            } else {
+                // 若三引号位于 // 之后，视为注释内容，不进入三引号状态
+                int slCommentIdx = line.indexOf("//");
+                if (slCommentIdx >= 0 && slCommentIdx <= openIdx) {
+                    analyzeLineForSemanticTokens(line, lineIndex, currentScope, semanticTokens, uri);
+                    continue;
+                }
+
+                if (openIdx > 0) {
+                    String before = line.substring(0, openIdx);
+                    analyzeLineForSemanticTokens(before, lineIndex, currentScope, semanticTokens, uri, 0);
+                }
+                int closeIdx = indexOfTripleQuote(line, openIdx + 3);
+                if (closeIdx >= 0) {
+                    addStringAndInterpolationTokensInSegment(line, openIdx, closeIdx + 3, openIdx, lineIndex, semanticTokens);
+                    if (closeIdx + 3 < line.length()) {
+                        String after = line.substring(closeIdx + 3);
+                        analyzeLineForSemanticTokens(after, lineIndex, currentScope, semanticTokens, uri, closeIdx + 3);
+                    }
+                } else {
+                    addStringAndInterpolationTokensInSegment(line, openIdx, line.length(), openIdx, lineIndex, semanticTokens);
+                    inTripleString = true;
+                    tripleStartLine = lineIndex;
+                    tripleStartChar = openIdx;
+                }
+            }
         }
         
         return encodeSemanticTokens(semanticTokens);
@@ -2259,10 +2327,8 @@ public class MagicTextDocumentService implements TextDocumentService {
             if (c == '"' || c == '\'') {
                 int start = i;
                 int end = findStringEnd(line, i, c);
-                if (end > start) {
-                    tokens.add(new SemanticToken(lineNumber, startOffset + start, end - start, 
-                                               SemanticTokenType.STRING, Collections.emptyList()));
-                }
+                // 使用分段方式添加字符串与插值，避免语义标记重叠
+                addStringAndInterpolationTokensInSegment(line, start, end + 1, startOffset + start, lineNumber, tokens);
                 i = end + 1;
                 continue;
             }
@@ -2356,6 +2422,124 @@ public class MagicTextDocumentService implements TextDocumentService {
             i++;
         }
         return line.length() - 1;
+    }
+
+    /**
+     * 查找三引号的位置
+     */
+    private int indexOfTripleQuote(String line, int fromIndex) {
+        return line.indexOf("\"\"\"", fromIndex);
+    }
+
+    /**
+     * 在给定片段内查找并添加插值标记（#{} 与 ${}）
+     */
+    private void addInterpolationTokensInSegment(String line, int segmentStart, int segmentEnd, int segmentOffset,
+                                                  int lineNumber, List<SemanticToken> tokens) {
+        if (segmentStart >= segmentEnd) {
+            return;
+        }
+        int i = segmentStart;
+        while (i < segmentEnd) {
+            char c = line.charAt(i);
+            if ((c == '#' || c == '$') && i + 1 < segmentEnd && line.charAt(i + 1) == '{') {
+                int braceOpen = i + 1;
+                int j = braceOpen + 1;
+                int braceDepth = 1;
+                while (j < segmentEnd && braceDepth > 0) {
+                    char cj = line.charAt(j);
+                    if (cj == '{') braceDepth++;
+                    else if (cj == '}') braceDepth--;
+                    j++;
+                }
+                int braceClose = j - 1;
+                if (braceDepth == 0 && braceOpen + 1 <= braceClose - 1) {
+                    int varStart = braceOpen + 1;
+                    int varLength = braceClose - varStart;
+                    if (varLength > 0) {
+                        tokens.add(new SemanticToken(lineNumber, segmentOffset + (varStart - segmentStart), varLength,
+                                SemanticTokenType.VARIABLE, Collections.emptyList()));
+                    }
+                }
+                i = j; // 跳过已处理的插值
+                continue;
+            }
+            i++;
+        }
+    }
+
+    /**
+     * 在字符串片段内分段添加 STRING 与插值（#{}、${}）标记，避免与变量高亮重叠
+     * segmentStart/segmentEnd 为片段在整行中的索引，segmentOffset 为该片段起始位置的绝对偏移
+     */
+    private void addStringAndInterpolationTokensInSegment(String line, int segmentStart, int segmentEnd, int segmentOffset,
+                                                           int lineNumber, List<SemanticToken> tokens) {
+        if (segmentStart >= segmentEnd) return;
+
+        int cursor = segmentStart;
+        int i = segmentStart;
+        while (i < segmentEnd) {
+            char c = line.charAt(i);
+            boolean isInterpolationStart = (c == '#' || c == '$') && (i + 1 < segmentEnd) && line.charAt(i + 1) == '{';
+            if (!isInterpolationStart) {
+                i++;
+                continue;
+            }
+
+            // 先提交 [cursor, i) 的字符串片段
+            if (i > cursor) {
+                tokens.add(new SemanticToken(lineNumber, segmentOffset + (cursor - segmentStart), i - cursor,
+                        SemanticTokenType.STRING, Collections.emptyList()));
+            }
+
+            // 标记插值起始 "#{" 或 "${}" 的符号为 OPERATOR（可选）
+            tokens.add(new SemanticToken(lineNumber, segmentOffset + (i - segmentStart), 2,
+                    SemanticTokenType.OPERATOR, Collections.emptyList()));
+
+            // 查找匹配的 '}' 并在其中高亮标识符
+            int j = i + 2; // 跳过 #{ / ${
+            int braceDepth = 1;
+            while (j < segmentEnd && braceDepth > 0) {
+                char cj = line.charAt(j);
+                if (cj == '{') braceDepth++;
+                else if (cj == '}') braceDepth--;
+                j++;
+            }
+            int exprEndExclusive = j; // 指向 '}' 之后
+            int exprStart = i + 2;
+            int exprEnd = exprEndExclusive - 1; // '}' 的位置
+
+            // 在表达式区域内为标识符添加 VARIABLE 高亮
+            int k = exprStart;
+            while (k <= exprEnd) {
+                char ck = line.charAt(k);
+                if (isIdentifierStart(ck)) {
+                    int s = k;
+                    k++;
+                    while (k <= exprEnd && isIdentifierChar(line.charAt(k))) {
+                        k++;
+                    }
+                    tokens.add(new SemanticToken(lineNumber, segmentOffset + (s - segmentStart), k - s,
+                            SemanticTokenType.VARIABLE, Collections.emptyList()));
+                } else {
+                    k++;
+                }
+            }
+
+            // 标记闭合 '}' 为 OPERATOR（可选）
+            tokens.add(new SemanticToken(lineNumber, segmentOffset + (exprEnd - segmentStart), 1,
+                    SemanticTokenType.OPERATOR, Collections.emptyList()));
+
+            // 继续扫描
+            i = exprEndExclusive;
+            cursor = exprEndExclusive; // 下一段字符串起点
+        }
+
+        // 提交最后的字符串片段
+        if (cursor < segmentEnd) {
+            tokens.add(new SemanticToken(lineNumber, segmentOffset + (cursor - segmentStart), segmentEnd - cursor,
+                    SemanticTokenType.STRING, Collections.emptyList()));
+        }
     }
 
     /**
@@ -2534,6 +2718,43 @@ public class MagicTextDocumentService implements TextDocumentService {
             encoded |= (1 << modifier.ordinal());
         }
         return encoded;
+    }
+
+    // ==================== CodeLens 提供者 ====================
+    @Override
+    public CompletableFuture<List<? extends CodeLens>> codeLens(CodeLensParams params) {
+        return CompletableFuture.supplyAsync(() -> {
+            String uri = params.getTextDocument().getUri();
+            String content = getDocumentContent(uri);
+            if (content == null) {
+                return Collections.emptyList();
+            }
+
+            List<CodeLens> lenses = new ArrayList<>();
+            String[] lines = content.split("\n", -1);
+
+            // 顶部显示诊断数量的 CodeLens
+            List<Diagnostic> diagnostics = validateDocumentContent(content);
+            Command diagCmd = new Command("问题: " + diagnostics.size(), "magicApi.refreshFileInfo",
+                    Collections.singletonList(uri));
+            lenses.add(new CodeLens(new Range(new Position(0, 0), new Position(0, 0)), diagCmd, null));
+
+            // 在包含 function 的行添加“测试 API” CodeLens
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i];
+                if (line.matches(".*\\bfunction\\b.*")) {
+                    Command cmd = new Command("测试 API", "magicApi.testApi", Collections.singletonList(uri));
+                    lenses.add(new CodeLens(new Range(new Position(i, 0), new Position(i, Math.max(0, line.length()))), cmd, null));
+                }
+            }
+
+            return lenses;
+        });
+    }
+
+    @Override
+    public CompletableFuture<CodeLens> resolveCodeLens(CodeLens unresolved) {
+        return CompletableFuture.completedFuture(unresolved);
     }
 
     // ==================== 语义标记相关的内部类 ====================
