@@ -151,4 +151,18 @@ public class MagicLanguageServer implements LanguageServer, LanguageClientAware 
     public LanguageClient getClient() {
         return client;
     }
+
+    /**
+     * Handle client trace configuration changes to avoid UnsupportedOperationException.
+     * LSP 3.16+: client may send $/setTrace with values: 'off' | 'messages' | 'verbose'.
+     */
+    @Override
+    public void setTrace(SetTraceParams params) {
+        try {
+            String value = params != null && params.getValue() != null ? params.getValue().toString() : "null";
+            logger.info("SetTrace notification received: {}", value);
+        } catch (Throwable ignore) {
+            // No-op: keep server stable even if params shape differs
+        }
+    }
 }
