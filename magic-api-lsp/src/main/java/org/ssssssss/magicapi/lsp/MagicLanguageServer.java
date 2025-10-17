@@ -131,8 +131,9 @@ public class MagicLanguageServer implements LanguageServer, LanguageClientAware 
     
     @Override
     public void exit() {
-        logger.info("Magic API Language Server exited");
-        System.exit(0);
+        // LSP 'exit' 通知表示客户端会话结束。对于嵌入式 Web 应用，不能直接终止整个 JVM。
+        // 这里仅记录日志并让传输层（WebSocket/STDIO）自行关闭，保持服务端进程存活。
+        logger.info("Magic API Language Server exit requested by client; keeping server alive (no System.exit)");
     }
     
     @Override

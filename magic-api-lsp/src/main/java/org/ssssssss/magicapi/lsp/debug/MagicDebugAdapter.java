@@ -5,18 +5,23 @@ import org.eclipse.lsp4j.debug.services.IDebugProtocolClient;
 import org.eclipse.lsp4j.debug.services.IDebugProtocolServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.ssssssss.magicapi.core.config.MagicConfiguration;
+import org.ssssssss.magicapi.core.model.ApiInfo;
+import org.ssssssss.magicapi.core.model.Header;
+import org.ssssssss.magicapi.core.model.MagicEntity;
+import org.ssssssss.magicapi.core.model.Parameter;
+import org.ssssssss.magicapi.core.model.Path;
+import org.ssssssss.magicapi.core.model.Options;
+import org.ssssssss.magicapi.core.service.MagicResourceService;
+import org.ssssssss.magicapi.utils.JsonUtils;
 import org.ssssssss.script.MagicScript;
-import org.ssssssss.script.MagicScriptContext;
 import org.ssssssss.script.MagicScriptDebugContext;
 import org.ssssssss.script.MagicScriptEngine;
 import org.ssssssss.script.exception.MagicScriptException;
 import org.ssssssss.script.MagicScriptEngineFactory;
-import org.ssssssss.script.parsing.Span;
-import org.ssssssss.script.runtime.MagicScriptRuntime;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +40,8 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
     private final AtomicInteger nextBreakpointId = new AtomicInteger(1);
     private final Map<Integer, SourceBreakpoint> breakpoints = new HashMap<>();
     private final Map<String, String> sourceFiles = new HashMap<>();
+    // Breakpoints per source path (normalized)
+    private final Map<String, List<Integer>> sourceBreakpoints = new ConcurrentHashMap<>();
     
     // Debug session state
     private boolean isRunning = false;
@@ -49,7 +56,10 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
     private final Map<String, Object> currentVariables = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> lineBreakpoints = new ConcurrentHashMap<>();
     private String currentSourcePath;
+    private String normalizedCurrentSourcePath;
     private java.lang.Thread debugThread;
+    private volatile boolean prepared = false;
+    private volatile boolean started = false;
     
     public void connect(IDebugProtocolClient client) {
         this.client = client;
@@ -95,58 +105,130 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
     @Override
     public CompletableFuture<Void> configurationDone(ConfigurationDoneArguments args) {
         logger.info("Configuration done");
+        // Note: VS Code extension may not forward configurationDone to server.
+        // We keep this method but actual start is coordinated in launch & setBreakpoints.
         return CompletableFuture.completedFuture(null);
     }
     
     @Override
     public CompletableFuture<Void> launch(Map<String, Object> args) {
         logger.info("Launch debug session with args: {}", args);
-        
+
         // Extract launch configuration
-        String program = (String) args.get("program");
-        String workspaceRoot = (String) args.get("workspaceRoot");
-        
-        logger.info("Launching Magic API script: {}", program);
-        
+        String program = Objects.toString(args.get("program"), null); // In extension, this is fileId
+        String fileKey = Objects.toString(args.get("fileKey"), null);
+        if (fileKey == null) {
+            fileKey = Objects.toString(args.get("programPath"), null);
+        }
+        if (fileKey == null) {
+            fileKey = Objects.toString(args.get("path"), null);
+        }
+        if (fileKey == null) {
+            fileKey = Objects.toString(args.get("target"), null);
+        }
+
+        logger.info("Launching Magic API script by id: {}", program);
+
         try {
             // Initialize Magic Script engine via factory to match constructor signature
             scriptEngine = new MagicScriptEngine(new MagicScriptEngineFactory());
-            currentSourcePath = program;
-            
-            // Read script content (Java 8 compatible)
-            String scriptContent = new String(Files.readAllBytes(Paths.get(program)), java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Create debug context with current breakpoints
-            List<Integer> breakpointLines = new ArrayList<>(lineBreakpoints.values());
-            debugContext = new MagicScriptDebugContext(breakpointLines);
-            
+
+            String scriptContent;
+            // Prefer loading by id via MagicResourceService
+            if (program != null) {
+                MagicResourceService resourceService = MagicConfiguration.getMagicResourceService();
+                MagicEntity entity = resourceService.file(program);
+                if (entity != null) {
+                    scriptContent = Objects.toString(entity.getScript(), "");
+                    // Use canonical script path for matching and UI
+                    String canonicalScriptPath = resourceService.getScriptName(entity) + ".ms";
+                    normalizedCurrentSourcePath = normalizePath(canonicalScriptPath);
+                    // Prefer showing a magic-api scheme path to the client for source linking
+                    currentSourcePath = "magic-api:/" + normalizedCurrentSourcePath;
+                    logger.debug("Launch current script: canonical={} normalized={} clientPath={}", canonicalScriptPath, normalizedCurrentSourcePath, currentSourcePath);
+
+                    // Create debug context with current breakpoints
+                    List<Integer> breakpointLines = new ArrayList<>();
+                    List<Integer> directLines = sourceBreakpoints.get(normalizedCurrentSourcePath);
+                    if (directLines != null) {
+                        breakpointLines.addAll(directLines);
+                    } else {
+                        List<Integer> altLines = sourceBreakpoints.get(stripResourceTypePrefix(normalizedCurrentSourcePath));
+                        if (altLines != null) breakpointLines.addAll(altLines);
+                    }
+                    debugContext = new MagicScriptDebugContext(breakpointLines);
+                    debugContext.setScriptName(resourceService.getScriptName(entity));
+                    // Populate default request variables if entity is ApiInfo
+                    if (entity instanceof ApiInfo) {
+                        ApiInfo apiInfo = (ApiInfo) entity;
+                        Map<String, Object> header = new LinkedHashMap<>();
+                        for (Header h : apiInfo.getHeaders()) {
+                            header.put(h.getName(), h.getValue());
+                        }
+                        Map<String, Object> pathVars = new LinkedHashMap<>();
+                        for (Path p : apiInfo.getPaths()) {
+                            Object val = p.getValue();
+                            if (val == null) val = p.getDefaultValue();
+                            pathVars.put(p.getName(), val);
+                        }
+                        Map<String, Object> query = new LinkedHashMap<>();
+                        for (Parameter p : apiInfo.getParameters()) {
+                            Object val = p.getValue();
+                            if (val == null) val = p.getDefaultValue();
+                            query.put(p.getName(), val);
+                        }
+                        Object body = null;
+                        String reqBody = apiInfo.getRequestBody();
+                        if (reqBody != null && !reqBody.trim().isEmpty()) {
+                            try {
+                                body = JsonUtils.readValue(reqBody, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>(){});
+                                if (body == null) {
+                                    body = reqBody;
+                                }
+                            } catch (Exception ignore) {
+                                body = reqBody;
+                            }
+                        }
+
+                        debugContext.set("path", pathVars);
+                        debugContext.set("header", header);
+                        debugContext.set("query", query);
+                        if (body != null) {
+                            debugContext.set("body", body);
+                        }
+
+                        // Set default data source option into context (if exists)
+                        String defaultDs = apiInfo.getOptionValue(Options.DEFAULT_DATA_SOURCE);
+                        if (defaultDs != null) {
+                            debugContext.set(Options.DEFAULT_DATA_SOURCE.getValue(), defaultDs);
+                        }
+                    }
+                } else {
+                    return CompletableFuture.completedFuture(null);                }
+            } else {
+                // No program provided; nothing to load
+                logger.warn("Launch called without program id or path");
+                return CompletableFuture.completedFuture(null);
+            }
+
             // Set debug callback
             debugContext.setCallback(this::onDebugPause);
-            
+
             // Compile script with debug support
             String debugScript = MagicScript.DEBUG_MARK + scriptContent;
             currentScript = MagicScript.create(debugScript, scriptEngine);
-            
+
             // Initialize debug session
             isRunning = true;
             isPaused = false;
-            
+
             // Send initialized event
             if (client != null) {
                 client.initialized();
             }
-            
-            // Start script execution in separate thread
-            debugThread = new java.lang.Thread(this::executeScript);
-            debugThread.setName("Magic Script Debug Thread");
-            debugThread.start();
-            
-        } catch (IOException e) {
-            logger.error("Failed to read script file: {}", program, e);
-            if (client != null) {
-                TerminatedEventArguments terminatedEvent = new TerminatedEventArguments();
-                client.terminated(terminatedEvent);
-            }
+            // Defer starting execution to wait for breakpoints
+            prepared = true;
+            scheduleStartFallback();
         } catch (Exception e) {
             logger.error("Failed to initialize debug session", e);
             if (client != null) {
@@ -154,7 +236,7 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
                 client.terminated(terminatedEvent);
             }
         }
-        
+
         return CompletableFuture.completedFuture(null);
     }
     
@@ -212,22 +294,25 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
     @Override
     public CompletableFuture<SetBreakpointsResponse> setBreakpoints(SetBreakpointsArguments args) {
         logger.info("Set breakpoints for source: {}", args.getSource().getPath());
-        
+
         String sourcePath = args.getSource().getPath();
+        String normalizedPath = normalizePath(sourcePath);
+        String normalizedPathNoType = stripResourceTypePrefix(normalizedPath);
+        logger.debug("Normalized breakpoint source path: {} ; current script path: {}", normalizedPath, normalizedCurrentSourcePath);
         SourceBreakpoint[] sourceBreakpoints = args.getBreakpoints();
-        
+
         List<Breakpoint> resultBreakpoints = new ArrayList<>();
-        
-        // Clear existing breakpoints for this source
-        lineBreakpoints.clear();
-        
+        List<Integer> linesForSource = new ArrayList<>();
+
         if (sourceBreakpoints != null) {
             for (SourceBreakpoint sourceBreakpoint : sourceBreakpoints) {
                 int id = nextBreakpointId.getAndIncrement();
                 int line = sourceBreakpoint.getLine();
                 
                 breakpoints.put(id, sourceBreakpoint);
-                lineBreakpoints.put(id, line);
+                // VS Code sends lines relative to original source.
+                // We compile with a leading DEBUG_MARK line, so actual runtime lines shift by +1.
+                linesForSource.add(line + 1);
                 
                 Breakpoint breakpoint = new Breakpoint();
                 breakpoint.setId(id);
@@ -240,10 +325,20 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
                 logger.debug("Set breakpoint {} at line {}", id, line);
             }
             
-            // Update debug context if it exists
-            if (debugContext != null) {
-                List<Integer> breakpointLines = new ArrayList<>(lineBreakpoints.values());
-                debugContext.setBreakpoints(breakpointLines);
+            // Store per-source breakpoints
+            this.sourceBreakpoints.put(normalizedPath, linesForSource);
+            if (!normalizedPathNoType.equals(normalizedPath)) {
+                this.sourceBreakpoints.put(normalizedPathNoType, new ArrayList<>(linesForSource));
+            }
+            // Update debug context if it's for current source
+            boolean matchesCurrent = normalizedPath.equals(normalizedCurrentSourcePath)
+                    || normalizedPathNoType.equals(stripResourceTypePrefix(normalizedCurrentSourcePath));
+            if (debugContext != null && matchesCurrent) {
+                logger.debug("Applying {} breakpoints to current debug context", linesForSource.size());
+                debugContext.setBreakpoints(new ArrayList<>(linesForSource));
+                maybeStartExecution();
+            } else {
+                logger.debug("Breakpoint source does not match current script. Skipping apply.");
             }
         }
         
@@ -484,10 +579,21 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
      * Execute the magic script in debug mode
      */
     private void executeScript() {
+        // 记录原始标准输出流，便于结束后恢复
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
         try {
             logger.info("Starting script execution in debug mode");
+            // 将 System.out/System.err 在当前脚本执行线程内桥接到 DAP 的 stdout/stderr
+            final java.lang.Thread execThread = java.lang.Thread.currentThread();
+            System.setOut(new DebugPrintStream(originalOut, "stdout", execThread));
+            System.setErr(new DebugPrintStream(originalErr, "stderr", execThread));
+            // Emit start event
+            sendConsoleJson("start", Collections.singletonMap("normalizedSource", normalizedCurrentSourcePath));
             Object result = currentScript.execute(debugContext);
-            logger.info("Script execution completed with result: {}", result);
+            logger.info("Script execution completed with result: \n{}", JsonUtils.toJsonString(result));
+            // Emit final result as JSON to console
+            sendConsoleJson("result", result);
             
             if (client != null) {
                 TerminatedEventArguments terminatedEvent = new TerminatedEventArguments();
@@ -495,18 +601,179 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
             }
         } catch (MagicScriptException e) {
             logger.error("Script execution failed", e);
+            // Emit error to console
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("message", e.getMessage());
+            sendConsoleJson("error", err);
             if (client != null) {
                 TerminatedEventArguments terminatedEvent = new TerminatedEventArguments();
                 client.terminated(terminatedEvent);
             }
         } catch (Exception e) {
             logger.error("Unexpected error during script execution", e);
+            // Emit error to console
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("message", e.getMessage());
+            sendConsoleJson("error", err);
             if (client != null) {
                 TerminatedEventArguments terminatedEvent = new TerminatedEventArguments();
                 client.terminated(terminatedEvent);
             }
         } finally {
             isRunning = false;
+            // 恢复 System.out/System.err
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+        }
+    }
+
+    /**
+     * 将 System.out/System.err 桥接为 DAP OutputEvent（仅在指定线程内生效）
+     */
+    private class DebugPrintStream extends PrintStream {
+        private final String category;
+        private final java.lang.Thread targetThread;
+        private final StringBuilder buffer = new StringBuilder();
+
+        DebugPrintStream(PrintStream delegate, String category, java.lang.Thread targetThread) {
+            super(delegate);
+            this.category = category;
+            this.targetThread = targetThread;
+        }
+
+        private void emit(String s) {
+            if (client != null) {
+                OutputEventArguments out = new OutputEventArguments();
+                out.setCategory(category);
+                out.setOutput(s);
+                client.output(out);
+            }
+        }
+
+        private boolean inTargetThread() {
+            return java.lang.Thread.currentThread() == targetThread;
+        }
+
+        @Override
+        public void write(int b) {
+            super.write(b);
+            if (inTargetThread()) {
+                char ch = (char) b;
+                buffer.append(ch);
+                if (ch == '\n') {
+                    emit(buffer.toString());
+                    buffer.setLength(0);
+                }
+            }
+        }
+
+        @Override
+        public void write(byte[] buf, int off, int len) {
+            super.write(buf, off, len);
+            if (inTargetThread()) {
+                String s = new String(buf, off, len, StandardCharsets.UTF_8);
+                buffer.append(s);
+                int idx;
+                while ((idx = buffer.indexOf("\n")) >= 0) {
+                    String line = buffer.substring(0, idx + 1);
+                    emit(line);
+                    buffer.delete(0, idx + 1);
+                }
+            }
+        }
+
+        @Override
+        public void flush() {
+            super.flush();
+            if (inTargetThread() && buffer.length() > 0) {
+                emit(buffer.toString());
+                buffer.setLength(0);
+            }
+        }
+    }
+
+    private void maybeStartExecution() {
+        synchronized (this) {
+            if (started || !prepared) {
+                return;
+            }
+            // Only start when we have breakpoints for current source
+            List<Integer> bps = sourceBreakpoints.get(normalizedCurrentSourcePath);
+            if (bps != null) {
+                startDebugThread();
+            }
+        }
+    }
+
+    private void scheduleStartFallback() {
+        new java.lang.Thread(() -> {
+            int waited = 0;
+            final int stepMs = 250;
+            final int maxWaitMs = 5000; // cap to prevent indefinite hang if client never sends setBreakpoints
+            try {
+                while (!started && prepared && waited < maxWaitMs) {
+                    synchronized (this) {
+                        // Only start when we've received setBreakpoints for the current source (empty list counts)
+                        boolean receivedForCurrent = false;
+                        if (normalizedCurrentSourcePath != null) {
+                            receivedForCurrent = sourceBreakpoints.containsKey(normalizedCurrentSourcePath)
+                                    || sourceBreakpoints.containsKey(stripResourceTypePrefix(normalizedCurrentSourcePath));
+                        }
+                        if (receivedForCurrent) {
+                            logger.debug("Breakpoints for current source have been received after {}ms; starting execution.", waited);
+                            maybeStartExecution();
+                            if (!started) {
+                                startDebugThread();
+                            }
+                            return;
+                        }
+                    }
+                    java.lang.Thread.sleep(stepMs);
+                    waited += stepMs;
+                }
+            } catch (InterruptedException ignored) {
+                java.lang.Thread.currentThread().interrupt();
+            }
+            synchronized (this) {
+                if (!started && prepared) {
+                    // Fallback: still start to avoid hanging, but log that breakpoints were not received
+                    logger.warn("Breakpoints for current source not received within {}ms; starting without them.", maxWaitMs);
+                    startDebugThread();
+                }
+            }
+        }, "Magic Script Debug Start Scheduler").start();
+    }
+
+    private void startDebugThread() {
+        if (started) return;
+        started = true;
+        debugThread = new java.lang.Thread(this::executeScript);
+        debugThread.setName("Magic Script Debug Thread");
+        debugThread.start();
+    }
+    
+    /**
+     * Send a console output event with JSON payload to VS Code.
+     * The payload structure is: { event: <event>, source: <currentSourcePath>, data: <data> }
+     */
+    private void sendConsoleJson(String event, Object data) {
+        if (client == null) return;
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("event", event);
+            payload.put("source", currentSourcePath);
+            if (data != null) {
+                payload.put("data", data);
+            }
+            OutputEventArguments out = new OutputEventArguments();
+            out.setCategory("console");
+            out.setOutput(JsonUtils.toJsonString(payload) + "\n");
+            client.output(out);
+        } catch (Exception ignore) {
+            OutputEventArguments out = new OutputEventArguments();
+            out.setCategory("console");
+            out.setOutput("{\"event\":\"" + event + "\",\"source\":\"" + String.valueOf(currentSourcePath) + "\"}\n");
+            client.output(out);
         }
     }
     
@@ -538,9 +805,11 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
             StackFrame frame = new StackFrame();
             frame.setId(1);
             frame.setName("Magic Script");
-            frame.setLine(range[0]);
+            // Runtime reports lines including the injected DEBUG_MARK header.
+            // VS Code expects lines relative to original source, so shift back by -1.
+            frame.setLine(range[0] - 1);
             frame.setColumn(range[1]);
-            frame.setEndLine(range[2]);
+            frame.setEndLine(range[2] - 1);
             frame.setEndColumn(range[3]);
             
             Source source = new Source();
@@ -558,6 +827,15 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
             stoppedEvent.setThreadId(currentThreadId);
             stoppedEvent.setAllThreadsStopped(true);
             client.stopped(stoppedEvent);
+        }
+        // Emit pause snapshot to console in JSON
+        try {
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+            snapshot.put("variables", new LinkedHashMap<>(currentVariables));
+            snapshot.put("range", debugInfo.get("range"));
+            sendConsoleJson("pause", snapshot);
+        } catch (Exception e) {
+            logger.debug("Failed to emit pause snapshot", e);
         }
     }
     
@@ -593,5 +871,48 @@ public class MagicDebugAdapter implements IDebugProtocolServer {
         }
         
         return value.toString();
+    }
+
+    private String normalizePath(String path) {
+        if (path == null) return null;
+        String p = path;
+        // Trim custom scheme if present
+        if (p.startsWith("magic-api:")) {
+            p = p.substring("magic-api:".length());
+        }
+        // Decode percent-encoding early to prevent mismatches
+        try {
+            p = java.net.URLDecoder.decode(p, "UTF-8");
+        } catch (Exception ignored) {
+            // keep original if decoding fails
+        }
+        // Remove leading slashes for canonical matching
+        while (p.startsWith("/")) {
+            p = p.substring(1);
+        }
+        // Strip any request-mapping suffix appended to script names, e.g. "name(/path/to/api)"
+        int idx = p.indexOf('(');
+        if (idx >= 0) {
+            String before = p.substring(0, idx);
+            // Preserve .ms extension if it existed after the parentheses
+            if (!before.endsWith(".ms") && p.contains(".ms")) {
+                before = before + ".ms";
+            }
+            p = before;
+        }
+        // Trim whitespace just in case
+        p = p.trim();
+        return p;
+    }
+
+    private String stripResourceTypePrefix(String p) {
+        if (p == null) return null;
+        String s = p;
+        while (s.startsWith("/")) s = s.substring(1);
+        if (s.startsWith("api/")) return s.substring(4);
+        if (s.startsWith("function/")) return s.substring(9);
+        if (s.startsWith("datasource/")) return s.substring(11);
+        if (s.startsWith("task/")) return s.substring(5);
+        return s;
     }
 }

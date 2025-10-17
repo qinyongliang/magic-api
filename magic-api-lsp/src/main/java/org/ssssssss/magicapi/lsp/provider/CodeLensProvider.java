@@ -23,19 +23,6 @@ public class CodeLensProvider {
 
     public List<CodeLens> generateCodeLenses(String uri, String content) {
         List<CodeLens> lenses = new ArrayList<>();
-
-        // 取消顶部诊断数量 CodeLens（改为由插件端提供独立按钮）
-
-        // 在包含 function 的行添加“测试 API” CodeLens
-        String[] lines = content.split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            if (line.matches(".*\\bfunction\\b.*")) {
-                Command cmd = new Command("测试 API", "magicApi.testApi", Collections.singletonList(uri));
-                lenses.add(new CodeLens(new Range(new Position(i, 0), new Position(i, Math.max(0, line.length()))), cmd, null));
-            }
-        }
-
         return lenses;
     }
 
